@@ -79,7 +79,7 @@ func restoreAll() {
     try? FileManager.default.removeItem(at: Marker.legacy)
 }
 
-// MARK: - Display model shared by the menu, hotkeys and CLI
+// MARK: - Display model shared by the panel, hotkeys and CLI
 
 struct Display { let id: CGDirectDisplayID; let uuid: String; let name: String; let on: Bool }
 
@@ -92,7 +92,7 @@ func displayName(_ id: CGDirectDisplayID) -> String {
 }
 
 /// Online displays plus the ones we turned off, in a stable order (first seen first),
-/// so "display 2" means the same screen in the menu, the hotkeys and the CLI.
+/// so "display 2" means the same screen in the panel, the hotkeys and the CLI.
 func displays() -> [Display] {
     // A display that is off may no longer report its UUID, so use the one we saved.
     var pairs = onlineIDs().compactMap { id in uuid(id).map { (id, $0) } }
@@ -208,9 +208,9 @@ if !cliArgs.isEmpty { exit(runCLI(cliArgs)) }
 
 // MARK: - App
 
-final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class App: NSObject, NSApplicationDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let menu = NSMenu()
+    lazy var panel = Panel(app: self)
     var signalSources: [DispatchSourceSignal] = []
     var supported: Bool { configureEnabled != nil }
     let volume = VolumeController()
@@ -218,8 +218,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         blog.notice("Shade \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
         if Marker.armed { blog.notice("marker found at launch; recovering"); restoreAll() }   // recover from a crash, kill or reboot
-        menu.delegate = self
-        item.menu = menu
+        item.button?.target = self
+        item.button?.action = #selector(togglePanel)
+        panel.devHooks()
         updateIcon()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(allOn), name: NSWorkspace.didWakeNotification, object: nil)
         registerHotKeys()
@@ -256,6 +257,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyAutoMode()
         volume.refresh()
         updateIcon()
+        panel.model.refresh()
     }
 
     // MARK: Update check: at most once a day, asks GitHub's public releases API. No server, no auto-install.
@@ -271,12 +273,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   let tag = j["tag_name"] as? String, let page = (j["html_url"] as? String).flatMap(URL.init(string:)) else { return }
             DispatchQueue.main.async {
                 self.update = isNewer(tag, than: appVersion) ? (tag, page) : nil
+                self.panel.model.refresh()
                 blog.notice("update check: latest \(tag, privacy: .public), newer: \(self.update != nil, privacy: .public)")
             }
         }.resume()
     }
     @objc func openUpdate() { if let u = update?.url { NSWorkspace.shared.open(u) } }
-    @objc func toggleUpdates() { defaults.set(!defaults.bool(forKey: "checkUpdates"), forKey: "checkUpdates"); checkForUpdate() }
+    func toggleUpdates() { defaults.set(!defaults.bool(forKey: "checkUpdates"), forKey: "checkUpdates"); checkForUpdate() }
 
     @objc func about() {
         let credits = NSAttributedString(string: """
@@ -307,18 +310,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             RegisterEventHotKey(UInt32(k), mods, EventHotKeyID(signature: OSType(0x53484445), id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
         }
     }
+    func hotTurn(_ d: Display, on: Bool) -> TurnResult { let r = turn(d, on: on); DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }; return r }
     func hotKey(_ n: Int) {
         if n == 0 { toggleOthers() }
         else if let d = displays().dropFirst(n - 1).first, turn(d, on: !d.on) == .lastDisplay { NSSound.beep() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon(); self.panel.model.refresh() }
     }
-    @objc func hotToggle() { hotKey(0) }
 
-    @objc func toggleLogin() {
+    @objc func togglePanel() { panel.toggle(item.button) }
+    func toggleLogin() {
         let svc = SMAppService.mainApp
         if svc.status == .enabled { try? svc.unregister() } else { try? svc.register() }
     }
-    @objc func toggleAuto() {
+    func toggleAuto() {
         defaults.set(!defaults.bool(forKey: "autoBuiltinOff"), forKey: "autoBuiltinOff")
         applyAutoMode(force: true); updateIcon()
     }
@@ -329,49 +333,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.image = img
     }
 
-    func menuNeedsUpdate(_ m: NSMenu) {
-        m.removeAllItems()
-        if !supported {
-            let u = NSMenuItem(title: "Unsupported on this macOS", action: nil, keyEquivalent: "")
-            u.isEnabled = false; m.addItem(u); m.addItem(.separator())
-        }
-        let ds = displays(), onCount = ds.filter(\.on).count
-        for (i, d) in ds.enumerated() {
-            let mi = NSMenuItem(title: d.name, action: #selector(toggle(_:)), keyEquivalent: i < 9 ? "\(i + 1)" : "")
-            mi.keyEquivalentModifierMask = [.command, .option, .control]
-            mi.target = self; mi.representedObject = d.uuid; mi.state = d.on ? .on : .off
-            if d.on && (onCount == 1 || !supported) { mi.isEnabled = false; mi.toolTip = supported ? "Last active display" : nil }
-            m.addItem(mi)
-        }
-        m.addItem(.separator())
-        let all = NSMenuItem(title: "Turn All On", action: #selector(allOn), keyEquivalent: "")
-        all.target = self; m.addItem(all)
-        let hk = NSMenuItem(title: "Toggle Other Displays", action: supported ? #selector(hotToggle) : nil, keyEquivalent: "b")
-        hk.keyEquivalentModifierMask = [.command, .option, .control]; hk.target = self; hk.isEnabled = supported; m.addItem(hk)
-        let au = NSMenuItem(title: "Built-in Off When External Connects", action: #selector(toggleAuto), keyEquivalent: "")
-        au.target = self; au.state = defaults.bool(forKey: "autoBuiltinOff") ? .on : .off; au.isEnabled = supported; m.addItem(au)
-        volume.addMenuItems(to: m)
-        m.addItem(.separator())
-        if let u = update {
-            let ui = NSMenuItem(title: "Update Available: \(u.tag)…", action: #selector(openUpdate), keyEquivalent: "")
-            ui.target = self; m.addItem(ui)
-        }
-        let ab = NSMenuItem(title: "About Shade", action: #selector(about), keyEquivalent: "")
-        ab.target = self; m.addItem(ab)
-        let cu = NSMenuItem(title: "Check for Updates Daily", action: #selector(toggleUpdates), keyEquivalent: "")
-        cu.target = self; cu.state = defaults.bool(forKey: "checkUpdates") ? .on : .off; m.addItem(cu)
-        let li = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
-        li.target = self; li.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(li)
-        m.addItem(.separator())
-        m.addItem(NSMenuItem(title: "Quit Shade", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-    }
-
-    @objc func toggle(_ s: NSMenuItem) {
-        guard let d = displays().first(where: { $0.uuid == s.representedObject as? String }) else { return }
-        turn(d, on: !d.on)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }
-    }
-    @objc func allOn() { restoreAll(); DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() } }
+    @objc func allOn() { restoreAll(); DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon(); self.panel.model.refresh() } }
 }
 
 let app = NSApplication.shared

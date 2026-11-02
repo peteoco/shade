@@ -1,0 +1,81 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0}
+body{width:400px;height:410px;overflow:hidden;font:13px/1.3 -apple-system,"SF Pro Text","Inter","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+#stage{position:relative;width:400px;height:410px;overflow:hidden;border-radius:14px;
+ background:radial-gradient(120% 90% at 15% 110%,#1f4d63 0%,transparent 60%),radial-gradient(90% 80% at 100% 0%,#2b3a55 0%,transparent 55%),linear-gradient(160deg,#141a22,#0d1117 70%)}
+.bar{position:absolute;left:0;right:0;top:0;height:30px;background:rgba(20,22,26,.55);backdrop-filter:blur(20px);display:flex;align-items:center;justify-content:flex-end;gap:18px;padding:0 18px;color:#e9ebee;font-size:13px}
+.bar .f{height:8px;border-radius:4px;background:rgba(255,255,255,.35)}
+.mi{width:30px;height:22px;border-radius:5px;display:grid;place-items:center}
+.mi.open{background:rgba(255,255,255,.18)}
+.pop{position:absolute;top:40px;left:50px;width:300px;border-radius:14px;padding:14px;color:#f2f3f5;
+ background:rgba(38,40,44,.80);backdrop-filter:blur(30px) saturate(1.4);box-shadow:0 0 0 .5px rgba(255,255,255,.18) inset,0 24px 60px rgba(0,0,0,.55),0 0 0 .5px rgba(0,0,0,.6)}
+.arrow{position:absolute;top:-7px;width:16px;height:8px;overflow:hidden}
+.arrow:after{content:"";position:absolute;left:3px;top:3px;width:10px;height:10px;transform:rotate(45deg);background:rgba(44,46,50,.95);box-shadow:0 0 0 .5px rgba(255,255,255,.2)}
+.hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.hd b{font-size:13.5px;font-weight:650}.sub{font-size:11px;color:rgba(235,235,245,.6)}
+.card{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.065);margin-bottom:6px}
+.card .t{flex:1;min-width:0}.card .n{font-weight:560;font-size:13px;white-space:nowrap}
+.tile{position:relative;width:44px;height:34px;border-radius:8px;background:#212223;flex:none;box-shadow:0 0 0 .5px rgba(255,255,255,.08) inset}
+.scr{position:absolute;left:9px;top:6px;width:26px;height:17px;border-radius:2px;background:#fff;overflow:hidden}
+.cur{position:absolute;left:1.5px;right:1.5px;top:0;display:flex;gap:1px;border-radius:0 0 1.5px 1.5px;overflow:hidden}
+.cur i{flex:1;background:#949494;border-radius:0 0 3px 3px}
+.neck{position:absolute;left:20px;top:24.5px;width:4px;height:3px;background:#fff}.foot{position:absolute;left:15.5px;top:27.5px;width:13px;height:2px;border-radius:1px;background:#fff}
+.lap .scr{left:10px;width:24px}.base{position:absolute;left:6px;top:24.5px;width:32px;height:2.5px;border-radius:1px;background:#fff}
+.sw{position:relative;width:32px;height:19px;border-radius:10px;flex:none;background:rgba(255,255,255,.16)}
+.sw .k{position:absolute;top:1.5px;left:1.5px;width:16px;height:16px;border-radius:50%;background:#e9e9eb;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.sw.dis{opacity:.55}
+.btn{margin-top:4px;height:32px;border-radius:8px;background:#0a84ff;color:#fff;font-weight:560;font-size:13.5px;display:flex;align-items:center;justify-content:center;gap:7px}
+.vol{display:flex;align-items:center;gap:9px;margin-top:12px;color:rgba(235,235,245,.6);font-size:11px}
+.trk{position:relative;flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.18)}
+.trk .fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#0a84ff}
+.trk .th{position:absolute;top:-6px;width:16px;height:16px;border-radius:50%;background:#ececee;box-shadow:0 1px 3px rgba(0,0,0,.4);margin-left:-8px}
+.hr{height:1px;background:rgba(255,255,255,.1);margin:12px 0 10px}
+.ft{display:flex;justify-content:space-between;font-size:11px;color:rgba(235,235,245,.55)}
+.ft span:first-child{color:rgba(235,235,245,.85);font-weight:560;font-size:12px}
+#cursor{position:absolute;left:0;top:0;width:22px;height:30px;transform-origin:3px 2px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+</style></head><body><div id="stage">
+<div class="bar"><span class="f" style="width:34px"></span><span class="f" style="width:22px"></span>
+ <span class="mi open" id="mi"><svg width="18" height="14" viewBox="0 0 18 14"><rect x="1" y="1" width="16" height="9.5" rx="1.6" fill="none" stroke="#fff" stroke-width="1.5"/><rect x="6" y="12" width="6" height="1.5" rx=".75" fill="#fff"/></svg></span>
+ <span class="f" style="width:18px"></span><span class="f" style="width:26px"></span><span>9:41 PM</span></div>
+<div class="pop" id="pop"><div class="arrow" style="left:calc(var(--ax) - 8px)"></div>
+ <div class="hd"><b>Displays</b><span class="sub" id="count">2 of 2 on</span></div>
+ <div class="card"><div class="tile"><div class="scr"><div class="cur" id="c0"><i></i><i></i><i></i><i></i></div></div><div class="neck"></div><div class="foot"></div></div>
+  <div class="t"><div class="n">DELL U4025QW</div><div class="sub" id="s0">Main · ⌃⌥⌘1</div></div><div class="sw" id="w0"><div class="k"></div></div></div>
+ <div class="card"><div class="tile lap"><div class="scr"><div class="cur" id="c1"><i></i><i></i><i></i><i></i></div></div><div class="base"></div></div>
+  <div class="t"><div class="n">Built-in Retina Display</div><div class="sub" id="s1">On · ⌃⌥⌘2</div></div><div class="sw" id="w1"><div class="k"></div></div></div>
+ <div class="btn" id="btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="12" r="4.5"/><g stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></g></svg>Turn All On</div>
+ <div class="vol"><svg width="16" height="14" viewBox="0 0 24 20" fill="rgba(235,235,245,.6)"><path d="M2 7h4l6-5v16l-6-5H2z"/><path d="M15 6.5a5 5 0 0 1 0 7M18 3.5a9 9 0 0 1 0 13" stroke="rgba(235,235,245,.6)" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+  <div class="trk"><div class="fill" style="width:50%"></div><div class="th" style="left:50%"></div></div><span style="width:20px;text-align:right">50</span></div>
+ <div class="hr"></div>
+ <div class="ft"><span>› Settings</span></div>
+ <div class="ft" style="margin-top:10px"><span style="font-weight:400;font-size:11px;color:rgba(235,235,245,.55)">About Shade</span><span>Quit</span></div>
+</div>
+<svg id="cursor" viewBox="0 0 22 30"><path d="M2 1.5v22.5l5.6-5.3 3.7 8.7 3.6-1.5-3.7-8.6H19z" fill="#000" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const mi=$('mi').getBoundingClientRect(), pop=$('pop');
+pop.style.setProperty('--ax',(mi.left+mi.width/2-pop.getBoundingClientRect().left)+'px');
+const c=(el,dx=0,dy=0)=>{const r=$(el).getBoundingClientRect();return[r.left+r.width/2+dx,r.top+r.height/2+dy]};
+const REST=[110,395], SW=c('w1',9,9), BTN=c('btn',20,6);
+const ease=x=>x<.5?2*x*x:1-Math.pow(-2*x+2,2)/2, cl=x=>Math.max(0,Math.min(1,x));
+const seg=(t,a,b)=>ease(cl((t-a)/(b-a))), mix=(p,q,k)=>[p[0]+(q[0]-p[0])*k,p[1]+(q[1]-p[1])*k];
+function sw(id,k,dis){const w=$(id);w.querySelector('.k').style.left=(1.5+13*k)+'px';
+ w.style.background=`rgba(${Math.round(255-245*k)},${Math.round(255-123*k)},255,${.16+.84*k})`;w.classList.toggle('dis',!!dis)}
+function render(t){
+ t=t%7;
+ // built-in: off from 1.75, back on from 5.15
+ const off=seg(t,1.75,2.15)*(1-seg(t,5.15,5.55)), isOff=off>.5;
+ sw('w1',1-off); sw('w0',1,isOff);
+ $('c1').style.height=(2.5+13*off)+'px'; $('c0').style.height='2.5px';
+ $('s1').textContent=isOff?'Off · ⌃⌥⌘2':'On · ⌃⌥⌘2';
+ $('s0').textContent=isOff?'Last screen on, stays on':'Main · ⌃⌥⌘1';
+ $('count').textContent=isOff?'1 of 2 on':'2 of 2 on';
+ let p=REST;
+ if(t<1.6)p=mix(REST,SW,seg(t,.6,1.6));else if(t<4.2)p=SW;else if(t<5)p=mix(SW,BTN,seg(t,4.2,5));else if(t<6.2)p=BTN;else p=mix(BTN,REST,seg(t,6.2,6.95));
+ const press=(t>1.62&&t<1.8)||(t>5.02&&t<5.2);
+ $('btn').style.background=(t>5.02&&t<5.25)?'#0670dc':'#0a84ff';
+ const cu=$('cursor');cu.style.transform=`translate(${p[0]-3}px,${p[1]-2}px) scale(${press?.88:1})`;
+}
+window.render=render; render(+new URLSearchParams(location.search).get('t')||0);
+</script></body></html>

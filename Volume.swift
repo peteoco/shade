@@ -76,10 +76,11 @@ func audioGoesToMonitor() -> Bool {
 final class VolumeController: NSObject {
     private let queue = DispatchQueue(label: "shade.ddc")   // DDC is slow; never block the menu or the keys
     private var monitors: [DDCMonitor] = []
-    private var level: (cur: Int, max: Int)?
+    private(set) var level: (cur: Int, max: Int)?
+    var onChange: (() -> Void)?
+    var hasMonitor: Bool { !monitors.isEmpty }
     private var mutedLevel: Int?
     private var tap: CFMachPort?
-    private weak var slider: NSSlider?
     var enabled: Bool { defaults.bool(forKey: "ddcVolume") }
     var available: Bool { avCreate != nil && avWrite != nil }
 
@@ -92,7 +93,8 @@ final class VolumeController: NSObject {
             let ms = DDCMonitor.all(), lv = ms.first?.readVolume()
             DispatchQueue.main.async {
                 self.monitors = ms
-                if let lv { self.level = (lv.0, lv.1); self.slider?.maxValue = Double(lv.1); self.slider?.integerValue = lv.0 }
+                if let lv { self.level = (lv.0, lv.1) }
+                self.onChange?()
                 blog.notice("ddc: \(ms.count, privacy: .public) external monitor(s), volume \(lv.map { "\($0.0)/\($0.1)" } ?? "unreadable", privacy: .public)")
             }
         }
@@ -101,7 +103,7 @@ final class VolumeController: NSObject {
     func set(_ v: Int) {
         guard let m = monitors.first, let lv = level else { return }
         let nv = min(max(v, 0), lv.max)
-        level = (nv, lv.max); slider?.integerValue = nv
+        level = (nv, lv.max); onChange?()
         queue.async { _ = m.setVolume(nv) }
     }
     func step(up: Bool) {
@@ -140,35 +142,14 @@ final class VolumeController: NSObject {
         tap = nil
     }
 
-    // MARK: Menu
-    @objc func toggleEnabled() {
+    // MARK: Panel
+    func toggleEnabled() {
         defaults.set(!enabled, forKey: "ddcVolume")
         if enabled { refresh(); startTap() } else { stopTap(); level = nil }
+        onChange?()
     }
-    @objc func sliderMoved(_ s: NSSlider) { mutedLevel = nil; set(s.integerValue) }
-
-    func addMenuItems(to m: NSMenu) {
-        guard available else { return }
-        m.addItem(.separator())
-        let t = NSMenuItem(title: "Monitor Volume Keys", action: #selector(toggleEnabled), keyEquivalent: "")
-        t.target = self; t.state = enabled ? .on : .off
-        t.toolTip = "Control an external monitor's own volume over DDC. Needs Accessibility permission for the volume keys."
-        m.addItem(t)
-        guard enabled else { return }
-        if tap == nil { startTap() }
-        refresh()
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 30))
-        let icon = NSImageView(frame: NSRect(x: 18, y: 6, width: 18, height: 18))
-        icon.image = NSImage(systemSymbolName: "speaker.wave.2", accessibilityDescription: "Monitor volume")
-        let s = NSSlider(value: Double(level?.cur ?? 0), minValue: 0, maxValue: Double(level?.max ?? 100), target: self, action: #selector(sliderMoved(_:)))
-        s.frame = NSRect(x: 42, y: 5, width: 160, height: 20); s.isContinuous = true
-        s.isEnabled = !monitors.isEmpty || level != nil
-        view.addSubview(icon); view.addSubview(s); slider = s
-        let si = NSMenuItem(); si.view = view; m.addItem(si)
-        if monitors.isEmpty && level == nil {
-            let n = NSMenuItem(title: "No DDC monitor found", action: nil, keyEquivalent: ""); n.isEnabled = false; m.addItem(n)
-        }
-    }
+    func userSet(_ v: Int) { mutedLevel = nil; set(v) }
+    func ensureTap() { if enabled && tap == nil { startTap() } }
 }
 
 /// `Shade volume` prints the monitor's volume; `Shade volume 30` sets it. Works whether or not the menu option is on.
