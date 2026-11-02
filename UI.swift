@@ -10,7 +10,7 @@ final class PanelModel: ObservableObject {
     @Published var list: [Display] = []
     @Published var volume: Double = 0
     @Published var volumeMax: Double = 100
-    @Published var settingsOpen = defaults.bool(forKey: "settingsOpen") { didSet { defaults.set(settingsOpen, forKey: "settingsOpen") } }
+    @Published var settingsOpen = false
     init(app: App) { self.app = app }
 
     /// Publishes only what changed, so an unchanged refresh costs SwiftUI nothing.
@@ -37,10 +37,25 @@ final class PanelModel: ObservableObject {
     func allOn() { app.allOn(); refresh() }
 }
 
+/// Two pages in one fixed-size panel. Both are always laid out, so the panel is as tall as the taller page
+/// and never resizes when Settings opens or closes: nothing moves, only the pages slide.
 struct PanelView: View {
     @ObservedObject var m: PanelModel
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            main.offset(x: m.settingsOpen ? -24 : 0).opacity(m.settingsOpen ? 0 : 1).allowsHitTesting(!m.settingsOpen)
+                .accessibilityHidden(m.settingsOpen)
+            settings.offset(x: m.settingsOpen ? 0 : 24).opacity(m.settingsOpen ? 1 : 0).allowsHitTesting(m.settingsOpen)
+                .accessibilityHidden(!m.settingsOpen)
+        }
+        .padding(14).frame(width: 300, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    func flip() { withAnimation(spring) { m.settingsOpen.toggle() } }
+
+    var main: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Displays").font(.headline)
@@ -60,28 +75,44 @@ struct PanelView: View {
             if m.app.volume.available && m.app.volume.enabled { VolumeRow(m: m) }
 
             Divider().padding(.top, 2)
-            // One button for the whole row: arrow and label run the same single animation.
-            Button { withAnimation(spring) { m.settingsOpen.toggle() } } label: {
+            Button(action: flip) {
                 HStack(spacing: 6) {
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(m.settingsOpen ? 90 : 0))
                     Text("Settings").font(.subheadline.weight(.medium))
                     Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if m.settingsOpen { SettingsView(m: m).padding(.top, 2).transition(.opacity) }
-            HStack(spacing: 14) {
-                Button("About Shade") { m.app.panel.close(); m.app.about() }
-                if let u = m.app.update { Button("Update \(u.tag)") { m.app.openUpdate() }.foregroundStyle(Color.accentColor) }
-                Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
-            }
-            .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+            footer
         }
-        .padding(14).frame(width: 300)
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    var settings: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: flip) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text("Settings").font(.headline)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).keyboardShortcut("[", modifiers: .command)
+            SettingsView(m: m)
+            Spacer(minLength: 0)
+            footer
+        }
+    }
+
+    var footer: some View {
+        HStack(spacing: 14) {
+            Button("About Shade") { m.app.panel.close(); m.app.about() }
+            if let u = m.app.update { Button("Update \(u.tag)") { m.app.openUpdate() }.foregroundStyle(Color.accentColor) }
+            Spacer()
+            Button("Quit") { NSApp.terminate(nil) }
+        }
+        .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
     }
 }
 
@@ -144,13 +175,20 @@ struct Thumb: View {
 struct VolumeRow: View {
     @ObservedObject var m: PanelModel
     var body: some View {
+        let v = m.app.volume
         HStack(spacing: 8) {
             Image(systemName: m.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill").foregroundStyle(.secondary).frame(width: 18)
-            Slider(value: Binding(get: { m.volume }, set: { m.volume = $0; m.app.volume.userSet(Int($0)) }), in: 0...max(m.volumeMax, 1))
-                .controlSize(.small).disabled(!m.app.volume.hasMonitor)
-            Text(m.app.volume.hasMonitor ? "\(Int(m.volume))" : "–").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 24, alignment: .trailing)
+            if v.status == .ok {
+                Slider(value: Binding(get: { m.volume }, set: { m.volume = $0; v.userSet(Int($0)) }), in: 0...max(m.volumeMax, 1))
+                    .controlSize(.small)
+                Text("\(Int(m.volume))").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 24, alignment: .trailing)
+            } else {
+                Text(v.status.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: 0)
+            }
         }
-        .help("Your monitor's own speakers, over DDC")
+        .frame(height: 22)
+        .help(v.status == .ok ? "Your monitor's own volume, over DDC. It controls the monitor's speakers and, on most monitors, its audio out." : v.status.message)
     }
 }
 
@@ -193,6 +231,7 @@ final class Panel: NSObject {
         let host = NSHostingController(rootView: PanelView(m: model))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
+        app.volume.onChange = { [weak model] in model?.refresh() }   // DDC answers arrive later, off the main thread
         // .transient closes the panel whenever the screens reconfigure. We close it ourselves on an outside click or Esc.
         popover.behavior = .applicationDefined
         popover.animates = true
@@ -211,6 +250,7 @@ final class Panel: NSObject {
         wantOpen = true
         model.app.volume.ensureTap(); model.app.volume.refresh()   // DDC is read off the main thread
         NSApp.activate(ignoringOtherApps: true)
+        if let v = popover.contentViewController?.view { v.layoutSubtreeIfNeeded(); popover.contentSize = v.fittingSize }
         popover.animates = animated
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
         popover.animates = true
