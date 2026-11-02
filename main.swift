@@ -5,6 +5,7 @@ import os
 
 let blog = Logger(subsystem: "com.peteoconnell.shade", category: "display")
 let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+let defaults = UserDefaults.standard
 
 // MARK: - Private API, looked up at runtime so a macOS change can't crash us
 
@@ -29,6 +30,7 @@ func uuid(_ id: CGDirectDisplayID) -> String? {
     guard let u = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
     return CFUUIDCreateString(nil, u) as String
 }
+func isBuiltin(_ id: CGDirectDisplayID) -> Bool { CGDisplayIsBuiltin(id) != 0 }
 
 // MARK: - Armed marker: ~/Library/Application Support/Shade/disabled.json
 // Exists only while some display is off. If we crash or get SIGKILLed, the next
@@ -77,6 +79,76 @@ func restoreAll() {
     try? FileManager.default.removeItem(at: Marker.legacy)
 }
 
+// MARK: - Display model shared by the menu, hotkeys and CLI
+
+struct Display { let id: CGDirectDisplayID; let uuid: String; let name: String; let on: Bool }
+
+func displayName(_ id: CGDirectDisplayID) -> String {
+    if let s = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }) {
+        return s.localizedName
+    }
+    if let o = Marker.load().first(where: { $0.lastID == id }) { return o.name }
+    return isBuiltin(id) ? "Built-in Display" : "Display \(id)"
+}
+
+/// Online displays plus the ones we turned off, in a stable order (first seen first),
+/// so "display 2" means the same screen in the menu, the hotkeys and the CLI.
+func displays() -> [Display] {
+    // A display that is off may no longer report its UUID, so use the one we saved.
+    var pairs = onlineIDs().compactMap { id in uuid(id).map { (id, $0) } }
+    for o in Marker.load() where !pairs.contains(where: { $0.1 == o.uuid }) { pairs.append((o.lastID, o.uuid)) }
+    let act = activeIDs()
+    var order = defaults.stringArray(forKey: "order") ?? []
+    var list: [Display] = []
+    for (id, u) in pairs {
+        if !order.contains(u) { order.append(u) }
+        list.append(Display(id: id, uuid: u, name: displayName(id), on: act.contains(id)))
+    }
+    defaults.set(order, forKey: "order")
+    return list.sorted { (order.firstIndex(of: $0.uuid) ?? 0) < (order.firstIndex(of: $1.uuid) ?? 0) }
+}
+
+enum TurnResult { case ok, lastDisplay, unsupported, failed }
+
+/// The one place a display is switched. Refuses to turn off the last active display,
+/// and arms the marker before anything goes dark.
+@discardableResult
+func turn(_ d: Display, on: Bool) -> TurnResult {
+    guard configureEnabled != nil else { return .unsupported }
+    var l = Marker.load().filter { $0.uuid != d.uuid }
+    if on {
+        guard setEnabled(d.id, true) else { return .failed }
+        Marker.save(l); return .ok
+    }
+    let act = activeIDs()
+    guard act.contains(d.id) else { return .ok }
+    guard act.count > 1 else { return .lastDisplay }
+    l.append(OffDisplay(uuid: d.uuid, lastID: d.id, name: d.name))
+    Marker.save(l)
+    guard setEnabled(d.id, false) else { Marker.save(l.filter { $0.uuid != d.uuid }); return .failed }
+    return .ok
+}
+
+/// ⌃⌥⌘B: if anything is off, turn it all back on; otherwise turn off every display except the main one.
+func toggleOthers() {
+    if Marker.armed { restoreAll(); return }
+    let main = CGMainDisplayID()
+    for d in displays() where d.on && d.id != main { turn(d, on: false) }
+}
+
+/// Auto mode: when an external display appears, turn the built-in display off.
+/// Only acts when the set of connected externals changes, so turning the built-in back on by hand sticks.
+func applyAutoMode(force: Bool = false) {
+    let externals = Set(displays().filter { !isBuiltin($0.id) }.map(\.uuid))
+    let previous = Set(defaults.stringArray(forKey: "lastExternals") ?? [])
+    defaults.set(Array(externals), forKey: "lastExternals")
+    guard defaults.bool(forKey: "autoBuiltinOff"), force || externals != previous, !externals.isEmpty else { return }
+    let ds = displays()
+    guard ds.contains(where: { !isBuiltin($0.id) && $0.on }), let b = ds.first(where: { isBuiltin($0.id) && $0.on }) else { return }
+    blog.notice("auto mode: external connected, turning built-in off")
+    turn(b, on: false)
+}
+
 /// "v1.10" > "1.9": compares dot-separated numbers, ignoring a leading "v".
 func isNewer(_ tag: String, than current: String) -> Bool {
     let n = { (s: String) in s.trimmingCharacters(in: CharacterSet(charactersIn: "vV")).split(separator: ".").map { Int($0) ?? 0 } }
@@ -85,22 +157,63 @@ func isNewer(_ tag: String, than current: String) -> Bool {
     return false
 }
 
-// MARK: - Rescue: `Shade --rescue` turns everything on and exits (works over SSH)
+// MARK: - Command line: `Shade --rescue`, `Shade list`, `Shade off 2`, ...
 
-if CommandLine.arguments.contains("--rescue") {
-    restoreAll()
-    print(configureEnabled == nil ? "Shade: display API not found; nothing to do." : "Shade: all displays on.")
-    exit(0)
+let cliUsage = """
+    usage: Shade <command>
+      list            show displays with their numbers
+      on <n|uuid>     turn a display on
+      off <n|uuid>    turn a display off (never the last one)
+      toggle <n|uuid> switch a display
+      others          same as ⌃⌥⌘B
+      all-on          turn every display on
+      volume [0-100]  read or set an external monitor's volume over DDC
+      --rescue        turn every display on (same as all-on)
+    """
+
+func runCLI(_ args: [String]) -> Int32 {
+    let cmd = args.first ?? ""
+    if cmd == "--rescue" || cmd == "all-on" {
+        restoreAll()
+        print(configureEnabled == nil ? "Shade: display API not found; nothing to do." : "Shade: all displays on.")
+        return 0
+    }
+    let ds = displays()
+    func find(_ key: String?) -> Display? {
+        guard let key else { return nil }
+        if let n = Int(key), n >= 1, n <= ds.count { return ds[n - 1] }
+        return ds.first { $0.uuid.caseInsensitiveCompare(key) == .orderedSame }
+    }
+    switch cmd {
+    case "list":
+        for (i, d) in ds.enumerated() { print("\(i + 1)  \(d.on ? "on " : "off")  \(d.name)\(d.id == CGMainDisplayID() ? " (main)" : "")  \(d.uuid)") }
+        return 0
+    case "others": toggleOthers(); return 0
+    case "volume": return runVolumeCLI(args.dropFirst().first)
+    case "on", "off", "toggle":
+        guard let d = find(args.dropFirst().first) else { fputs("Shade: no such display. Run `Shade list`.\n", stderr); return 2 }
+        switch turn(d, on: cmd == "on" || (cmd == "toggle" && !d.on)) {
+        case .ok: return 0
+        case .lastDisplay: fputs("Shade: refusing to turn off the last active display.\n", stderr); return 3
+        case .unsupported: fputs("Shade: unsupported on this macOS.\n", stderr); return 4
+        case .failed: fputs("Shade: macOS refused the change.\n", stderr); return 1
+        }
+    default: print(cliUsage); return cmd == "help" || cmd == "--help" ? 0 : 2
+    }
 }
+
+// Launched with arguments (other than the ones macOS adds): act as a CLI and exit.
+let cliArgs = Array(CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn") && !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") })
+if !cliArgs.isEmpty { exit(runCLI(cliArgs)) }
 
 // MARK: - App
 
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
-    let defaults = UserDefaults.standard
     var signalSources: [DispatchSourceSignal] = []
     var supported: Bool { configureEnabled != nil }
+    let volume = VolumeController()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         blog.notice("Shade \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
@@ -109,17 +222,23 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
         updateIcon()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(allOn), name: NSWorkspace.didWakeNotification, object: nil)
-        registerHotKey()
+        registerHotKeys()
         installSignalHandlers()
         CGDisplayRegisterReconfigurationCallback({ _, flags, ctx in
             guard !flags.contains(.beginConfigurationFlag) else { return }
             let me = Unmanaged<App>.fromOpaque(ctx!).takeUnretainedValue()
             // Let the display list settle, then make sure something is still lit.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { me.ensureSomethingOn() }
+            me.settle?.cancel()
+            let w = DispatchWorkItem { me.displaysChanged() }
+            me.settle = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
         }, Unmanaged.passUnretained(self).toOpaque())
         checkForUpdate()
         if defaults.object(forKey: "loginSet") == nil { try? SMAppService.mainApp.register(); defaults.set(true, forKey: "loginSet") }
+        applyAutoMode(force: true)
+        volume.start()
     }
+    var settle: DispatchWorkItem?
 
     func applicationWillTerminate(_ n: Notification) { restoreAll() }
 
@@ -132,8 +251,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func ensureSomethingOn() {
+    func displaysChanged() {
         if activeIDs().isEmpty { blog.error("no active display after reconfiguration"); restoreAll() }
+        applyAutoMode()
+        volume.refresh()
         updateIcon()
     }
 
@@ -170,42 +291,40 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationVersion: appVersion, .version: "", NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "© 2026 Peter O'Connell"])
     }
 
-    func registerHotKey() {
+    // MARK: Hotkeys: ⌃⌥⌘B toggles other displays, ⌃⌥⌘1…9 toggle display 1…9
+    func registerHotKeys() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, ctx in
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, ctx in
+            var hk = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
             let me = Unmanaged<App>.fromOpaque(ctx!).takeUnretainedValue()
-            DispatchQueue.main.async { me.hotToggle() }; return noErr
+            DispatchQueue.main.async { me.hotKey(Int(hk.id)) }; return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
-        var ref: EventHotKeyRef?
-        RegisterEventHotKey(UInt32(kVK_ANSI_B), UInt32(cmdKey | optionKey | controlKey), EventHotKeyID(signature: OSType(0x424C4B54), id: 1), GetApplicationEventTarget(), 0, &ref)
+        let mods = UInt32(cmdKey | optionKey | controlKey)
+        let keys = [kVK_ANSI_B, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+        for (i, k) in keys.enumerated() {
+            var ref: EventHotKeyRef?
+            RegisterEventHotKey(UInt32(k), mods, EventHotKeyID(signature: OSType(0x53484445), id: UInt32(i)), GetApplicationEventTarget(), 0, &ref)
+        }
     }
-    // ⌃⌥⌘B: if anything is off, turn it all back on; otherwise turn off every display except the main one
-    @objc func hotToggle() {
-        if !Marker.load().isEmpty { allOn(); return }
-        guard supported else { return }
-        let main = CGMainDisplayID()
-        for id in activeIDs() where id != main { set(id, false) }
+    func hotKey(_ n: Int) {
+        if n == 0 { toggleOthers() }
+        else if let d = displays().dropFirst(n - 1).first, turn(d, on: !d.on) == .lastDisplay { NSSound.beep() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }
     }
+    @objc func hotToggle() { hotKey(0) }
+
     @objc func toggleLogin() {
         let svc = SMAppService.mainApp
         if svc.status == .enabled { try? svc.unregister() } else { try? svc.register() }
     }
+    @objc func toggleAuto() {
+        defaults.set(!defaults.bool(forKey: "autoBuiltinOff"), forKey: "autoBuiltinOff")
+        applyAutoMode(force: true); updateIcon()
+    }
 
-    /// Online displays plus the ones we turned off (disabled displays drop out of the online list).
-    func listed() -> [CGDirectDisplayID] {
-        var all = onlineIDs()
-        for o in Marker.load() where !all.contains(o.lastID) { all.append(o.lastID) }
-        return all
-    }
-    func name(_ id: CGDirectDisplayID) -> String {
-        if let s = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }) {
-            return s.localizedName
-        }
-        if let o = Marker.load().first(where: { $0.lastID == id }) { return o.name }
-        return CGDisplayIsBuiltin(id) != 0 ? "Built-in Display" : "Display \(id)"
-    }
     func updateIcon() {
-        let img = NSImage(systemSymbolName: Marker.load().isEmpty ? "display" : "display.2", accessibilityDescription: "Shade")
+        let img = NSImage(systemSymbolName: Marker.armed ? "display.2" : "display", accessibilityDescription: "Shade")
         img?.isTemplate = true
         item.button?.image = img
     }
@@ -216,12 +335,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let u = NSMenuItem(title: "Unsupported on this macOS", action: nil, keyEquivalent: "")
             u.isEnabled = false; m.addItem(u); m.addItem(.separator())
         }
-        let act = activeIDs()
-        for id in listed() {
-            let on = act.contains(id)
-            let mi = NSMenuItem(title: name(id), action: #selector(toggle(_:)), keyEquivalent: "")
-            mi.target = self; mi.tag = Int(id); mi.state = on ? .on : .off
-            if on && (act.count == 1 || !supported) { mi.isEnabled = false; mi.toolTip = supported ? "Last active display" : nil }
+        let ds = displays(), onCount = ds.filter(\.on).count
+        for (i, d) in ds.enumerated() {
+            let mi = NSMenuItem(title: d.name, action: #selector(toggle(_:)), keyEquivalent: i < 9 ? "\(i + 1)" : "")
+            mi.keyEquivalentModifierMask = [.command, .option, .control]
+            mi.target = self; mi.representedObject = d.uuid; mi.state = d.on ? .on : .off
+            if d.on && (onCount == 1 || !supported) { mi.isEnabled = false; mi.toolTip = supported ? "Last active display" : nil }
             m.addItem(mi)
         }
         m.addItem(.separator())
@@ -229,6 +348,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         all.target = self; m.addItem(all)
         let hk = NSMenuItem(title: "Toggle Other Displays", action: supported ? #selector(hotToggle) : nil, keyEquivalent: "b")
         hk.keyEquivalentModifierMask = [.command, .option, .control]; hk.target = self; hk.isEnabled = supported; m.addItem(hk)
+        let au = NSMenuItem(title: "Built-in Off When External Connects", action: #selector(toggleAuto), keyEquivalent: "")
+        au.target = self; au.state = defaults.bool(forKey: "autoBuiltinOff") ? .on : .off; au.isEnabled = supported; m.addItem(au)
+        volume.addMenuItems(to: m)
         m.addItem(.separator())
         if let u = update {
             let ui = NSMenuItem(title: "Update Available: \(u.tag)…", action: #selector(openUpdate), keyEquivalent: "")
@@ -244,22 +366,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(NSMenuItem(title: "Quit Shade", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
-    func set(_ id: CGDirectDisplayID, _ on: Bool) {
-        guard let u = uuid(id) else { return }
-        var l = Marker.load().filter { $0.uuid != u }
-        if !on {
-            // Arm before turning off, so a crash mid-change still recovers.
-            l.append(OffDisplay(uuid: u, lastID: id, name: name(id)))
-            Marker.save(l)
-            if !setEnabled(id, false) { Marker.save(l.filter { $0.uuid != u }) }
-        } else if setEnabled(id, true) {
-            Marker.save(l)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }
-    }
     @objc func toggle(_ s: NSMenuItem) {
-        let id = CGDirectDisplayID(s.tag), act = activeIDs()
-        if act.contains(id) { if act.count > 1 && supported { set(id, false) } } else { set(id, true) }
+        guard let d = displays().first(where: { $0.uuid == s.representedObject as? String }) else { return }
+        turn(d, on: !d.on)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() }
     }
     @objc func allOn() { restoreAll(); DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.updateIcon() } }
 }
