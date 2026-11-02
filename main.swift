@@ -1,6 +1,10 @@
 import Cocoa
 import Carbon
 import ServiceManagement
+import os
+
+let blog = Logger(subsystem: "com.peteoconnell.blackout", category: "display")
+let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
 // MARK: - Private API, looked up at runtime so a macOS change can't crash us
 
@@ -49,17 +53,30 @@ func setEnabled(_ id: CGDirectDisplayID, _ on: Bool) -> Bool {
     guard let fn = configureEnabled else { return false }
     var cfg: CGDisplayConfigRef?
     guard CGBeginDisplayConfiguration(&cfg) == .success else { return false }
-    if fn(cfg, id, on) == .success { return CGCompleteDisplayConfiguration(cfg, .forSession) == .success }
-    CGCancelDisplayConfiguration(cfg); return false
+    if fn(cfg, id, on) == .success {
+        let ok = CGCompleteDisplayConfiguration(cfg, .forSession) == .success
+        blog.notice("display \(id, privacy: .public) \(on ? "on" : "off", privacy: .public): \(ok ? "ok" : "failed", privacy: .public)")
+        return ok
+    }
+    CGCancelDisplayConfiguration(cfg); blog.error("display \(id, privacy: .public) \(on ? "on" : "off", privacy: .public) refused"); return false
 }
 
 /// Turn every display we know about back on and disarm. Safe to call from anywhere, any time.
 func restoreAll() {
+    blog.notice("restoring all displays")
     var ids = Set(onlineIDs())
     for o in Marker.load() { ids.insert(o.lastID) }
     let act = activeIDs()
     for id in ids where !act.contains(id) { _ = setEnabled(id, true) }
     Marker.save([])
+}
+
+/// "v1.10" > "1.9": compares dot-separated numbers, ignoring a leading "v".
+func isNewer(_ tag: String, than current: String) -> Bool {
+    let n = { (s: String) in s.trimmingCharacters(in: CharacterSet(charactersIn: "vV")).split(separator: ".").map { Int($0) ?? 0 } }
+    let a = n(tag), b = n(current)
+    for i in 0..<max(a.count, b.count) { let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0; if x != y { return x > y } }
+    return false
 }
 
 // MARK: - Rescue: `Blackout --rescue` turns everything on and exits (works over SSH)
@@ -80,7 +97,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var supported: Bool { configureEnabled != nil }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        if !Marker.load().isEmpty { restoreAll() }   // recover from a crash, kill or reboot
+        blog.notice("Blackout \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
+        if !Marker.load().isEmpty { blog.notice("marker found at launch; recovering"); restoreAll() }   // recover from a crash, kill or reboot
         menu.delegate = self
         item.menu = menu
         updateIcon()
@@ -93,6 +111,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Let the display list settle, then make sure something is still lit.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { me.ensureSomethingOn() }
         }, Unmanaged.passUnretained(self).toOpaque())
+        checkForUpdate()
         if defaults.object(forKey: "loginSet") == nil { try? SMAppService.mainApp.register(); defaults.set(true, forKey: "loginSet") }
     }
 
@@ -102,14 +121,47 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)   // let the dispatch source handle it instead of dying
             let s = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            s.setEventHandler { restoreAll(); exit(0) }
+            s.setEventHandler { blog.notice("signal \(sig, privacy: .public)"); restoreAll(); exit(0) }
             s.resume(); signalSources.append(s)
         }
     }
 
     func ensureSomethingOn() {
-        if activeIDs().isEmpty { restoreAll() }
+        if activeIDs().isEmpty { blog.error("no active display after reconfiguration"); restoreAll() }
         updateIcon()
+    }
+
+    // MARK: Update check: at most once a day, asks GitHub's public releases API. No server, no auto-install.
+    var update: (tag: String, url: URL)?
+    func checkForUpdate(force: Bool = false) {
+        if defaults.object(forKey: "checkUpdates") == nil { defaults.set(true, forKey: "checkUpdates") }
+        let last = defaults.double(forKey: "lastUpdateCheck")
+        guard force || (defaults.bool(forKey: "checkUpdates") && Date().timeIntervalSince1970 - last > 86_400) else { return }
+        defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+        let api = URL(string: "https://api.github.com/repos/peteoco/blackout/releases/latest")!
+        URLSession.shared.dataTask(with: api) { data, _, _ in
+            guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = j["tag_name"] as? String, let page = (j["html_url"] as? String).flatMap(URL.init(string:)) else { return }
+            DispatchQueue.main.async {
+                self.update = isNewer(tag, than: appVersion) ? (tag, page) : nil
+                blog.notice("update check: latest \(tag, privacy: .public), newer: \(self.update != nil, privacy: .public)")
+            }
+        }.resume()
+    }
+    @objc func openUpdate() { if let u = update?.url { NSWorkspace.shared.open(u) } }
+    @objc func toggleUpdates() { defaults.set(!defaults.bool(forKey: "checkUpdates"), forKey: "checkUpdates"); checkForUpdate() }
+
+    @objc func about() {
+        let credits = NSAttributedString(string: """
+            Turn any display off without unplugging it.
+
+            Lost a screen? Press ⌃⌥⌘B, or run
+            /Applications/Blackout.app/Contents/MacOS/Blackout --rescue
+
+            github.com/peteoco/blackout · MIT License
+            """, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor])
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationVersion: appVersion, .version: "", NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "© 2026 Peter O'Connell"])
     }
 
     func registerHotKey() {
@@ -172,6 +224,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hk = NSMenuItem(title: "Toggle Other Displays", action: supported ? #selector(hotToggle) : nil, keyEquivalent: "b")
         hk.keyEquivalentModifierMask = [.command, .option, .control]; hk.target = self; hk.isEnabled = supported; m.addItem(hk)
         m.addItem(.separator())
+        if let u = update {
+            let ui = NSMenuItem(title: "Update Available: \(u.tag)…", action: #selector(openUpdate), keyEquivalent: "")
+            ui.target = self; m.addItem(ui)
+        }
+        let ab = NSMenuItem(title: "About Blackout", action: #selector(about), keyEquivalent: "")
+        ab.target = self; m.addItem(ab)
+        let cu = NSMenuItem(title: "Check for Updates Daily", action: #selector(toggleUpdates), keyEquivalent: "")
+        cu.target = self; cu.state = defaults.bool(forKey: "checkUpdates") ? .on : .off; m.addItem(cu)
         let li = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         li.target = self; li.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(li)
         m.addItem(.separator())

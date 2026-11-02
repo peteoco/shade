@@ -16,9 +16,22 @@ Blackout is a free, open-source macOS menu bar app that switches individual disp
 - **Restores on exit.** Quitting Blackout, or stopping it with `kill`, Ctrl-C or a logout, turns every display back on.
 - **Recovers from crashes.** If Blackout crashes or is force-killed while a display is off, it turns everything back on the next time it starts, including at login after a reboot.
 - **Watches for trouble.** If displays change and nothing is left on, Blackout turns them all back on.
+- **Update check.** Once a day Blackout asks GitHub whether there's a newer release and shows "Update Available" in the menu. It never downloads or installs anything. Turn it off with Check for Updates Daily.
 - **Fails safe.** If a macOS update removes the display API, Blackout shows "Unsupported on this macOS" instead of crashing, and Turn All On still shows.
 
 ## Install
+
+Requires macOS 13 or later. Blackout is a universal app for Apple silicon and Intel Macs, but it has only been tested on Apple silicon so far.
+
+### Homebrew
+
+```sh
+brew install --cask peteoco/tap/blackout
+```
+
+The cask comes from a personal tap, `peteoco/homebrew-tap`. Because Blackout isn't notarized, the cask removes the quarantine flag after installing so the app opens normally.
+
+### Download
 
 1. Download the latest `Blackout.zip` from [Releases](../../releases).
 2. Unzip it and move `Blackout.app` to `/Applications`.
@@ -75,6 +88,16 @@ If you ever can't see a screen:
 3. Or restart your Mac. Displays come back on at login.
 
 Blackout keeps a small file at `~/Library/Application Support/Blackout/disabled.json` while any display is off. It's how Blackout knows to recover after a crash, and it's deleted when everything is back on.
+
+## Logs
+
+Blackout logs every display change, wake, signal and update check to the system log:
+
+```sh
+log show --last 1h --predicate 'subsystem == "com.peteoconnell.blackout"' --info
+```
+
+Please include this output when you report a bug.
 
 ## Private API caveat
 
