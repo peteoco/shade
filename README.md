@@ -1,8 +1,12 @@
-# Blackout
+# Shade
+
+<img src="icon.png" width="128" alt="Shade icon">
 
 Turn any display off without unplugging it. One click, one hotkey, and you can never lock yourself out.
 
-Blackout is a free, open-source macOS menu bar app that switches individual displays off and back on. It is handy for turning off a MacBook's built-in screen while it's docked with the lid open, or for blanking a monitor you aren't using.
+Shade was called Blackout until version 1.3.
+
+Shade is a free, open-source macOS menu bar app that switches individual displays off and back on. It is handy for turning off a MacBook's built-in screen while it's docked with the lid open, or for blanking a monitor you aren't using.
 
 ## Features
 
@@ -12,41 +16,41 @@ Blackout is a free, open-source macOS menu bar app that switches individual disp
 - **Global hotkey:** `Ctrl` + `Option` + `Cmd` + `B` turns all non-main displays off or on.
 - **Launch at login** (uses `SMAppService`).
 - **Back on at wake.** All displays are turned on again when your Mac wakes from sleep.
-- **Can't lock you out.** Blackout won't turn off your last active display.
-- **Restores on exit.** Quitting Blackout, or stopping it with `kill`, Ctrl-C or a logout, turns every display back on.
-- **Recovers from crashes.** If Blackout crashes or is force-killed while a display is off, it turns everything back on the next time it starts, including at login after a reboot.
-- **Watches for trouble.** If displays change and nothing is left on, Blackout turns them all back on.
-- **Update check.** Once a day Blackout asks GitHub whether there's a newer release and shows "Update Available" in the menu. It never downloads or installs anything. Turn it off with Check for Updates Daily.
-- **Fails safe.** If a macOS update removes the display API, Blackout shows "Unsupported on this macOS" instead of crashing, and Turn All On still shows.
+- **Can't lock you out.** Shade won't turn off your last active display.
+- **Restores on exit.** Quitting Shade, or stopping it with `kill`, Ctrl-C or a logout, turns every display back on.
+- **Recovers from crashes.** If Shade crashes or is force-killed while a display is off, it turns everything back on the next time it starts, including at login after a reboot.
+- **Watches for trouble.** If displays change and nothing is left on, Shade turns them all back on.
+- **Update check.** Once a day Shade asks GitHub whether there's a newer release and shows "Update Available" in the menu. It never downloads or installs anything. Turn it off with Check for Updates Daily.
+- **Fails safe.** If a macOS update removes the display API, Shade shows "Unsupported on this macOS" instead of crashing, and Turn All On still shows.
 
 ## Install
 
-Requires macOS 13 or later. Blackout is a universal app for Apple silicon and Intel Macs, but it has only been tested on Apple silicon so far.
+Requires macOS 13 or later. Shade is a universal app for Apple silicon and Intel Macs, but it has only been tested on Apple silicon so far.
 
 ### Homebrew
 
 ```sh
-brew install --cask peteoco/tap/blackout
+brew install --cask peteoco/tap/shade
 ```
 
-The cask comes from a personal tap, `peteoco/homebrew-tap`. Because Blackout isn't notarized, the cask removes the quarantine flag after installing so the app opens normally.
+The cask comes from a personal tap, `peteoco/homebrew-tap`. Because Shade isn't notarized, the cask removes the quarantine flag after installing so the app opens normally.
 
 ### Download
 
-1. Download the latest `Blackout.zip` from [Releases](../../releases).
-2. Unzip it and move `Blackout.app` to `/Applications`.
-3. Open it. A Blackout icon appears in the menu bar.
+1. Download the latest `Shade.zip` from [Releases](../../releases).
+2. Unzip it and move `Shade.app` to `/Applications`.
+3. Open it. A Shade icon appears in the menu bar.
 
 ### Opening an unsigned app
 
-Blackout isn't notarized yet, so Gatekeeper blocks it the first time you open it. You can get past this in any of these ways:
+Shade isn't notarized yet, so Gatekeeper blocks it the first time you open it. You can get past this in any of these ways:
 
-- **Right-click (or Control-click) `Blackout.app` in Finder, choose Open, then click Open in the dialog.**
+- **Right-click (or Control-click) `Shade.app` in Finder, choose Open, then click Open in the dialog.**
 - Or try to open it once, then go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**.
 - Or remove the quarantine flag in Terminal:
 
   ```sh
-  xattr -dr com.apple.quarantine /Applications/Blackout.app
+  xattr -dr com.apple.quarantine /Applications/Shade.app
   ```
 
 You only have to do this once.
@@ -56,16 +60,16 @@ You only have to do this once.
 You need the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
-git clone https://github.com/peteoco/blackout.git
-cd blackout
+git clone https://github.com/peteoco/shade.git
+cd shade
 ./build.sh
 ```
 
-`build.sh` compiles `main.swift` and packages `Blackout.app` with `AppIcon.icns`.
+`build.sh` compiles `main.swift` and packages `Shade.app` with `AppIcon.icns`.
 
 ## Safety
 
-Blackout is built so you never get stuck with a black screen:
+Shade is built so you never get stuck with a black screen:
 
 - It won't turn off the last display that's still on.
 - Every display comes back on when your Mac wakes.
@@ -81,30 +85,30 @@ If you ever can't see a screen:
 2. Or, from Terminal or over SSH from another machine, run:
 
    ```sh
-   /Applications/Blackout.app/Contents/MacOS/Blackout --rescue
+   /Applications/Shade.app/Contents/MacOS/Shade --rescue
    ```
 
    It turns every display on and exits. It works even when the menu bar app isn't running.
 3. Or restart your Mac. Displays come back on at login.
 
-Blackout keeps a small file at `~/Library/Application Support/Blackout/disabled.json` while any display is off. It's how Blackout knows to recover after a crash, and it's deleted when everything is back on.
+Shade keeps a small file at `~/Library/Application Support/Shade/disabled.json` while any display is off. It's how Shade knows to recover after a crash, and it's deleted when everything is back on.
 
 ## Logs
 
-Blackout logs every display change, wake, signal and update check to the system log:
+Shade logs every display change, wake, signal and update check to the system log:
 
 ```sh
-log show --last 1h --predicate 'subsystem == "com.peteoconnell.blackout"' --info
+log show --last 1h --predicate 'subsystem == "com.peteoconnell.shade"' --info
 ```
 
 Please include this output when you report a bug.
 
 ## Private API caveat
 
-To turn displays off, Blackout calls `CGSConfigureDisplayEnabled`, a private macOS API that Apple doesn't document. Other display utilities use the same call. Because the API is private:
+To turn displays off, Shade calls `CGSConfigureDisplayEnabled`, a private macOS API that Apple doesn't document. Other display utilities use the same call. Because the API is private:
 
 - A macOS update could change it or break it.
-- Blackout can't be sold in the Mac App Store.
+- Shade can't be sold in the Mac App Store.
 - Results can differ between Apple silicon and Intel Macs, and between display setups.
 
 If something breaks after an update, please [open an issue](../../issues) and include your Mac model and macOS version.

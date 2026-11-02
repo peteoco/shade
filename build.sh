@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e; cd "$(dirname "$0")"
-A=Blackout.app; rm -rf $A; mkdir -p $A/Contents/MacOS
+A=Shade.app; rm -rf $A; mkdir -p $A/Contents/MacOS
 # Universal binary (Apple silicon + Intel), runs on macOS 13 and later
-for arch in arm64 x86_64; do swiftc -O -target $arch-apple-macos13 *.swift -o /tmp/Blackout-$arch -framework Cocoa; done
-lipo -create /tmp/Blackout-arm64 /tmp/Blackout-x86_64 -output $A/Contents/MacOS/Blackout
+for arch in arm64 x86_64; do swiftc -O -target $arch-apple-macos13 *.swift -o /tmp/Shade-$arch -framework Cocoa; done
+lipo -create /tmp/Shade-arm64 /tmp/Shade-x86_64 -output $A/Contents/MacOS/Shade
 cat > $A/Contents/Info.plist <<P
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
-<key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundleName</key><string>Blackout</string><key>CFBundleIdentifier</key><string>com.peteoconnell.blackout</string>
-<key>CFBundleExecutable</key><string>Blackout</string><key>CFBundleVersion</key><string>3</string><key>CFBundleShortVersionString</key><string>1.2</string>
+<key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundleName</key><string>Shade</string><key>CFBundleIdentifier</key><string>com.peteoconnell.shade</string>
+<key>CFBundleExecutable</key><string>Shade</string><key>CFBundleVersion</key><string>4</string><key>CFBundleShortVersionString</key><string>1.3</string>
 <key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
 P

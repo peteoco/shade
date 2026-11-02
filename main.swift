@@ -3,7 +3,7 @@ import Carbon
 import ServiceManagement
 import os
 
-let blog = Logger(subsystem: "com.peteoconnell.blackout", category: "display")
+let blog = Logger(subsystem: "com.peteoconnell.shade", category: "display")
 let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
 // MARK: - Private API, looked up at runtime so a macOS change can't crash us
@@ -30,19 +30,24 @@ func uuid(_ id: CGDirectDisplayID) -> String? {
     return CFUUIDCreateString(nil, u) as String
 }
 
-// MARK: - Armed marker: ~/Library/Application Support/Blackout/disabled.json
+// MARK: - Armed marker: ~/Library/Application Support/Shade/disabled.json
 // Exists only while some display is off. If we crash or get SIGKILLed, the next
 // launch (or login, via launch at login) sees it and turns everything back on.
 
 struct OffDisplay: Codable { var uuid: String; var lastID: UInt32; var name: String }
 
 enum Marker {
+    static let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     static let url: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Blackout")
+        let dir = support.appendingPathComponent("Shade")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("disabled.json")
     }()
-    static func load() -> [OffDisplay] { (try? JSONDecoder().decode([OffDisplay].self, from: Data(contentsOf: url))) ?? [] }
+    /// Marker left by the app's old name (Blackout 1.0-1.2). Read for recovery, then removed.
+    static let legacy = support.appendingPathComponent("Blackout/disabled.json")
+    static func read(_ u: URL) -> [OffDisplay] { (try? JSONDecoder().decode([OffDisplay].self, from: Data(contentsOf: u))) ?? [] }
+    static func load() -> [OffDisplay] { read(url) }
+    static var armed: Bool { !load().isEmpty || !read(legacy).isEmpty }
     static func save(_ l: [OffDisplay]) {
         if l.isEmpty { try? FileManager.default.removeItem(at: url) }
         else if let d = try? JSONEncoder().encode(l) { try? d.write(to: url, options: .atomic) }
@@ -65,10 +70,11 @@ func setEnabled(_ id: CGDirectDisplayID, _ on: Bool) -> Bool {
 func restoreAll() {
     blog.notice("restoring all displays")
     var ids = Set(onlineIDs())
-    for o in Marker.load() { ids.insert(o.lastID) }
+    for o in Marker.load() + Marker.read(Marker.legacy) { ids.insert(o.lastID) }
     let act = activeIDs()
     for id in ids where !act.contains(id) { _ = setEnabled(id, true) }
     Marker.save([])
+    try? FileManager.default.removeItem(at: Marker.legacy)
 }
 
 /// "v1.10" > "1.9": compares dot-separated numbers, ignoring a leading "v".
@@ -79,11 +85,11 @@ func isNewer(_ tag: String, than current: String) -> Bool {
     return false
 }
 
-// MARK: - Rescue: `Blackout --rescue` turns everything on and exits (works over SSH)
+// MARK: - Rescue: `Shade --rescue` turns everything on and exits (works over SSH)
 
 if CommandLine.arguments.contains("--rescue") {
     restoreAll()
-    print(configureEnabled == nil ? "Blackout: display API not found; nothing to do." : "Blackout: all displays on.")
+    print(configureEnabled == nil ? "Shade: display API not found; nothing to do." : "Shade: all displays on.")
     exit(0)
 }
 
@@ -97,8 +103,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var supported: Bool { configureEnabled != nil }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        blog.notice("Blackout \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
-        if !Marker.load().isEmpty { blog.notice("marker found at launch; recovering"); restoreAll() }   // recover from a crash, kill or reboot
+        blog.notice("Shade \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
+        if Marker.armed { blog.notice("marker found at launch; recovering"); restoreAll() }   // recover from a crash, kill or reboot
         menu.delegate = self
         item.menu = menu
         updateIcon()
@@ -138,7 +144,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let last = defaults.double(forKey: "lastUpdateCheck")
         guard force || (defaults.bool(forKey: "checkUpdates") && Date().timeIntervalSince1970 - last > 86_400) else { return }
         defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
-        let api = URL(string: "https://api.github.com/repos/peteoco/blackout/releases/latest")!
+        let api = URL(string: "https://api.github.com/repos/peteoco/shade/releases/latest")!
         URLSession.shared.dataTask(with: api) { data, _, _ in
             guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = j["tag_name"] as? String, let page = (j["html_url"] as? String).flatMap(URL.init(string:)) else { return }
@@ -156,9 +162,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Turn any display off without unplugging it.
 
             Lost a screen? Press ⌃⌥⌘B, or run
-            /Applications/Blackout.app/Contents/MacOS/Blackout --rescue
+            /Applications/Shade.app/Contents/MacOS/Shade --rescue
 
-            github.com/peteoco/blackout · MIT License
+            github.com/peteoco/shade · MIT License
             """, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor])
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits, .applicationVersion: appVersion, .version: "", NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "© 2026 Peter O'Connell"])
@@ -199,7 +205,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return CGDisplayIsBuiltin(id) != 0 ? "Built-in Display" : "Display \(id)"
     }
     func updateIcon() {
-        let img = NSImage(systemSymbolName: Marker.load().isEmpty ? "display" : "display.2", accessibilityDescription: "Blackout")
+        let img = NSImage(systemSymbolName: Marker.load().isEmpty ? "display" : "display.2", accessibilityDescription: "Shade")
         img?.isTemplate = true
         item.button?.image = img
     }
@@ -228,14 +234,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ui = NSMenuItem(title: "Update Available: \(u.tag)…", action: #selector(openUpdate), keyEquivalent: "")
             ui.target = self; m.addItem(ui)
         }
-        let ab = NSMenuItem(title: "About Blackout", action: #selector(about), keyEquivalent: "")
+        let ab = NSMenuItem(title: "About Shade", action: #selector(about), keyEquivalent: "")
         ab.target = self; m.addItem(ab)
         let cu = NSMenuItem(title: "Check for Updates Daily", action: #selector(toggleUpdates), keyEquivalent: "")
         cu.target = self; cu.state = defaults.bool(forKey: "checkUpdates") ? .on : .off; m.addItem(cu)
         let li = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
         li.target = self; li.state = SMAppService.mainApp.status == .enabled ? .on : .off; m.addItem(li)
         m.addItem(.separator())
-        m.addItem(NSMenuItem(title: "Quit Blackout", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        m.addItem(NSMenuItem(title: "Quit Shade", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
     func set(_ id: CGDirectDisplayID, _ on: Bool) {
