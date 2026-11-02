@@ -43,14 +43,37 @@ struct PanelView: View {
     @ObservedObject var m: PanelModel
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            main.offset(x: m.settingsOpen ? -24 : 0).opacity(m.settingsOpen ? 0 : 1).allowsHitTesting(!m.settingsOpen)
-                .accessibilityHidden(m.settingsOpen)
-            settings.offset(x: m.settingsOpen ? 0 : 24).opacity(m.settingsOpen ? 1 : 0).allowsHitTesting(m.settingsOpen)
-                .accessibilityHidden(!m.settingsOpen)
+        // Invisible copies of both pages set the size (the taller wins), then the real pages fill it.
+        // Both pages end with the same bottom row, so "Settings" and "Back" sit in exactly the same spot.
+        ZStack { main.hidden(); settings.hidden() }
+            .accessibilityHidden(true)
+            .overlay(alignment: .top) {
+                ZStack(alignment: .top) {
+                    main.frame(maxHeight: .infinity, alignment: .top)
+                        .offset(x: m.settingsOpen ? -24 : 0).opacity(m.settingsOpen ? 0 : 1).allowsHitTesting(!m.settingsOpen)
+                        .accessibilityHidden(m.settingsOpen)
+                    settings.frame(maxHeight: .infinity, alignment: .top)
+                        .offset(x: m.settingsOpen ? 0 : 24).opacity(m.settingsOpen ? 1 : 0).allowsHitTesting(m.settingsOpen)
+                        .accessibilityHidden(!m.settingsOpen)
+                }
+            }
+            .padding(14).frame(width: 300, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(Vibrancy().ignoresSafeArea())
+    }
+
+    /// The one row that switches pages. Same frame on both pages, the whole row is the button.
+    func pageRow(back: Bool) -> some View {
+        Button(action: flip) {
+            HStack(spacing: 6) {
+                if back { Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                Text(back ? "Back" : "Settings").font(.subheadline.weight(.medium))
+                Spacer()
+                if !back { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+            }
+            .frame(height: 18).contentShape(Rectangle())
         }
-        .padding(14).frame(width: 300, alignment: .topLeading)
-        .fixedSize(horizontal: false, vertical: true)
+        .buttonStyle(.plain)
     }
 
     func flip() { withAnimation(spring) { m.settingsOpen.toggle() } }
@@ -74,33 +97,20 @@ struct PanelView: View {
 
             if m.app.volume.available && m.app.volume.enabled { VolumeRow(m: m) }
 
+            Spacer(minLength: 0)
             Divider().padding(.top, 2)
-            Button(action: flip) {
-                HStack(spacing: 6) {
-                    Text("Settings").font(.subheadline.weight(.medium))
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            pageRow(back: false)
             footer
         }
     }
 
     var settings: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button(action: flip) {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    Text("Settings").font(.headline)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).keyboardShortcut("[", modifiers: .command)
+            Text("Settings").font(.headline)
             SettingsView(m: m)
             Spacer(minLength: 0)
+            Divider().padding(.top, 2)
+            pageRow(back: true).keyboardShortcut("[", modifiers: .command)
             footer
         }
     }
@@ -114,6 +124,17 @@ struct PanelView: View {
         }
         .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
     }
+}
+
+/// Real behind-window vibrancy, a little more see-through than the stock popover. AppKit switches it
+/// to a solid fill by itself when Reduce Transparency is on, and adapts it to light and dark mode.
+struct Vibrancy: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .hudWindow; v.blendingMode = .behindWindow; v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
 }
 
 struct DisplayCard: View {
