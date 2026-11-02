@@ -8,7 +8,7 @@ Shade is a free, open-source macOS menu bar app that switches individual display
 
 <p align="center"><img src="docs/demo.gif" width="400" alt="Shade's menu bar panel: the built-in display's switch is turned off and its tile's curtain drops, then Turn All On brings it back"></p>
 
-Click the menu bar icon for a small panel: one card per display with its own switch, a big Turn All On button, your monitor's volume, and settings tucked underneath. It follows light and dark mode.
+Click the menu bar icon for a small panel: one card per display with its own switch, a big Turn All On button, and a Settings page one click away. It follows light and dark mode.
 
 <p align="center"><img src="docs/panel-light.png" width="300" alt="Shade panel in light mode, with the built-in display off"> &nbsp; <img src="docs/panel-dark.png" width="300" alt="Shade panel in dark mode, settings open"></p>
 
@@ -21,7 +21,6 @@ Click the menu bar icon for a small panel: one card per display with its own swi
 - **Per-display hotkeys:** `Ctrl` + `Option` + `Cmd` + `1` to `9` switch display 1 to 9, in the order the panel lists them.
 - **Auto mode (optional):** Built-in Off When External Connects turns the MacBook screen off when you plug in a monitor. Unplug the monitor and the built-in screen comes back on.
 - **Command line and Shortcuts:** `Shade list`, `Shade off 2`, `Shade on 2` and more. See [Command line](#command-line).
-- **Monitor volume (optional):** volume keys, and knobs that send them, change your external monitor's own volume over DDC. There's also a slider in the panel. See [Monitor volume](#monitor-volume).
 - **Launch at login** (uses `SMAppService`).
 - **Back on at wake.** All displays are turned on again when your Mac wakes from sleep.
 - **Can't lock you out.** Shade won't turn off your last active display. Its switch is greyed out and the card says "Last screen on, stays on".
@@ -87,27 +86,9 @@ $S on 2
 $S toggle 2
 $S others        # same as Ctrl-Option-Cmd-B
 $S all-on        # same as --rescue
-$S volume        # read the external monitor's volume, e.g. 50/100
-$S volume 30     # set it
 ```
 
 You can pass a display's UUID instead of its number. To use Shade from **Shortcuts** or a Stream Deck, add a Run Shell Script action with one of these commands.
-
-## Monitor volume
-
-macOS can't change the volume of sound sent to a monitor over DisplayPort or HDMI, so the volume keys do nothing. Shade can ask the monitor to change its own volume instead, over DDC/CI.
-
-1. In the Shade panel, open **Settings** and turn on **Monitor volume keys**.
-2. When macOS asks, give Shade Accessibility permission in System Settings > Privacy & Security > Accessibility. Shade needs it to catch the volume keys.
-3. The volume up, down and mute keys now change the monitor's volume, but only while your sound output is a DisplayPort or HDMI monitor. Speakers and headphones work as before.
-
-Notes:
-
-- This works on Apple silicon Macs only. It uses Apple's private `IOAVService` calls, the same way [MonitorControl](https://github.com/MonitorControl/MonitorControl) does.
-- Your monitor needs DDC/CI turned on in its own menu, and some monitors don't support volume over DDC at all.
-- With more than one external monitor, Shade controls the first one it finds.
-- Because Shade is ad-hoc signed, macOS may ask for Accessibility permission again after each update.
-- macOS doesn't show its volume overlay for these changes. The panel's slider shows the level.
 
 ## Safety
 

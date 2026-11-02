@@ -1,15 +1,13 @@
 import SwiftUI
 import ServiceManagement
 
-// MARK: - The menu bar panel: one card per display, Turn All On, volume, settings.
+// MARK: - The menu bar panel: one card per display, Turn All On, settings.
 
 let spring = Animation.spring(response: 0.2, dampingFraction: 0.9)
 
 final class PanelModel: ObservableObject {
     unowned let app: App
     @Published var list: [Display] = []
-    @Published var volume: Double = 0
-    @Published var volumeMax: Double = 100
     @Published var settingsOpen = false
     init(app: App) { self.app = app }
 
@@ -17,7 +15,6 @@ final class PanelModel: ObservableObject {
     func refresh() {
         let l = displays()
         if l != list { withAnimation(spring) { list = l } }
-        if let lv = app.volume.level, Double(lv.cur) != volume || Double(lv.max) != volumeMax { volume = Double(lv.cur); volumeMax = Double(lv.max) }
         objectWillChange.send()
     }
     var supported: Bool { app.supported }
@@ -94,8 +91,6 @@ struct PanelView: View {
             }
             .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
             .help("Every display back on. Also ⌃⌥⌘B, or Shade --rescue")
-
-            if m.app.volume.available && m.app.volume.enabled { VolumeRow(m: m) }
 
             Spacer(minLength: 0)
             Divider().padding(.top, 2)
@@ -193,26 +188,6 @@ struct Thumb: View {
     }
 }
 
-struct VolumeRow: View {
-    @ObservedObject var m: PanelModel
-    var body: some View {
-        let v = m.app.volume
-        HStack(spacing: 8) {
-            Image(systemName: m.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill").foregroundStyle(.secondary).frame(width: 18)
-            if v.status == .ok {
-                Slider(value: Binding(get: { m.volume }, set: { m.volume = $0; v.userSet(Int($0)) }), in: 0...max(m.volumeMax, 1))
-                    .controlSize(.small)
-                Text("\(Int(m.volume))").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 24, alignment: .trailing)
-            } else {
-                Text(v.status.message).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                Spacer(minLength: 0)
-            }
-        }
-        .frame(height: 22)
-        .help(v.status == .ok ? "Your monitor's own volume, over DDC. It controls the monitor's speakers and, on most monitors, its audio out." : v.status.message)
-    }
-}
-
 struct SettingsView: View {
     @ObservedObject var m: PanelModel
     var body: some View {
@@ -220,10 +195,6 @@ struct SettingsView: View {
             row("Launch at login", SMAppService.mainApp.status == .enabled) { m.app.toggleLogin() }
             row("Built-in off when an external connects", defaults.bool(forKey: "autoBuiltinOff")) { m.app.toggleAuto() }
                 .disabled(!m.supported)
-            if m.app.volume.available {
-                row("Monitor volume keys", m.app.volume.enabled) { m.app.volume.toggleEnabled() }
-                    .help("Control an external monitor's own volume over DDC. Volume keys need Accessibility permission.")
-            }
             row("Check for updates daily", defaults.bool(forKey: "checkUpdates")) { m.app.toggleUpdates() }
             HStack {
                 Text("Hotkeys")
@@ -252,7 +223,6 @@ final class Panel: NSObject {
         let host = NSHostingController(rootView: PanelView(m: model))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
-        app.volume.onChange = { [weak model] in model?.refresh() }   // DDC answers arrive later, off the main thread
         // .transient closes the panel whenever the screens reconfigure. We close it ourselves on an outside click or Esc.
         popover.behavior = .applicationDefined
         popover.animates = true
@@ -269,7 +239,6 @@ final class Panel: NSObject {
     func show(_ b: NSStatusBarButton?, animated: Bool) {
         guard let b, b.window != nil else { return }
         wantOpen = true
-        model.app.volume.ensureTap(); model.app.volume.refresh()   // DDC is read off the main thread
         NSApp.activate(ignoringOtherApps: true)
         if let v = popover.contentViewController?.view { v.layoutSubtreeIfNeeded(); popover.contentSize = v.fittingSize }
         popover.animates = animated

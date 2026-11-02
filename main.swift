@@ -167,7 +167,6 @@ let cliUsage = """
       toggle <n|uuid> switch a display
       others          same as ⌃⌥⌘B
       all-on          turn every display on
-      volume [0-100]  read or set an external monitor's volume over DDC
       --rescue        turn every display on (same as all-on)
     """
 
@@ -189,7 +188,6 @@ func runCLI(_ args: [String]) -> Int32 {
         for (i, d) in ds.enumerated() { print("\(i + 1)  \(d.on ? "on " : "off")  \(d.name)\(d.id == CGMainDisplayID() ? " (main)" : "")  \(d.uuid)") }
         return 0
     case "others": toggleOthers(); return 0
-    case "volume": return runVolumeCLI(args.dropFirst().first)
     case "on", "off", "toggle":
         guard let d = find(args.dropFirst().first) else { fputs("Shade: no such display. Run `Shade list`.\n", stderr); return 2 }
         switch turn(d, on: cmd == "on" || (cmd == "toggle" && !d.on)) {
@@ -213,7 +211,6 @@ final class App: NSObject, NSApplicationDelegate {
     lazy var panel = Panel(app: self)
     var signalSources: [DispatchSourceSignal] = []
     var supported: Bool { configureEnabled != nil }
-    let volume = VolumeController()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         blog.notice("Shade \(appVersion, privacy: .public) launched, display API \(configureEnabled == nil ? "missing" : "found", privacy: .public)")
@@ -237,7 +234,6 @@ final class App: NSObject, NSApplicationDelegate {
         checkForUpdate()
         if defaults.object(forKey: "loginSet") == nil { try? SMAppService.mainApp.register(); defaults.set(true, forKey: "loginSet") }
         applyAutoMode(force: true)
-        volume.start()
     }
     var settle: DispatchWorkItem?
 
@@ -255,7 +251,6 @@ final class App: NSObject, NSApplicationDelegate {
     func displaysChanged() {
         if activeIDs().isEmpty { blog.error("no active display after reconfiguration"); restoreAll() }
         applyAutoMode()
-        volume.refresh()
         updateIcon()
         panel.model.refresh()
         panel.endReconfigure()

@@ -7,7 +7,7 @@ lipo -create /tmp/Shade-arm64 /tmp/Shade-x86_64 -output $A/Contents/MacOS/Shade
 cat > $A/Contents/Info.plist <<P
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>
 <key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundleName</key><string>Shade</string><key>CFBundleIdentifier</key><string>com.peteoconnell.shade</string>
-<key>CFBundleExecutable</key><string>Shade</string><key>CFBundleVersion</key><string>9</string><key>CFBundleShortVersionString</key><string>2.4</string>
+<key>CFBundleExecutable</key><string>Shade</string><key>CFBundleVersion</key><string>10</string><key>CFBundleShortVersionString</key><string>2.5</string>
 <key>CFBundlePackageType</key><string>APPL</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.0</string>
 </dict></plist>
 P
