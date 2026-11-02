@@ -4,8 +4,6 @@
 
 Turn any display off without unplugging it. One click, one hotkey, and you can never lock yourself out.
 
-Shade was called Blackout until version 1.3.
-
 Shade is a free, open-source macOS menu bar app that switches individual displays off and back on. It is handy for turning off a MacBook's built-in screen while it's docked with the lid open, or for blanking a monitor you aren't using.
 
 ## Features
