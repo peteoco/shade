@@ -3,6 +3,8 @@ import ServiceManagement
 
 // MARK: - The menu bar panel: one card per display, Turn All On, volume, settings.
 
+let spring = Animation.spring(response: 0.2, dampingFraction: 0.9)
+
 final class PanelModel: ObservableObject {
     unowned let app: App
     @Published var list: [Display] = []
@@ -11,9 +13,11 @@ final class PanelModel: ObservableObject {
     @Published var settingsOpen = defaults.bool(forKey: "settingsOpen") { didSet { defaults.set(settingsOpen, forKey: "settingsOpen") } }
     init(app: App) { self.app = app }
 
+    /// Publishes only what changed, so an unchanged refresh costs SwiftUI nothing.
     func refresh() {
-        list = displays()
-        if let lv = app.volume.level { volume = Double(lv.cur); volumeMax = Double(lv.max) }
+        let l = displays()
+        if l != list { withAnimation(spring) { list = l } }
+        if let lv = app.volume.level, Double(lv.cur) != volume || Double(lv.max) != volumeMax { volume = Double(lv.cur); volumeMax = Double(lv.max) }
         objectWillChange.send()
     }
     var supported: Bool { app.supported }
@@ -21,9 +25,14 @@ final class PanelModel: ObservableObject {
     func canTurnOff(_ d: Display) -> Bool { supported && !(d.on && onCount == 1) }
 
     func set(_ d: Display, on: Bool) {
-        if app.hotTurn(d, on: on) == .lastDisplay { NSSound.beep() }
-        list = list.map { $0.uuid == d.uuid ? Display(id: d.id, uuid: d.uuid, name: d.name, on: on) : $0 }   // show it now, confirm in a moment
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refresh() }
+        guard on || canTurnOff(d) else { NSSound.beep(); return }
+        app.panel.beginReconfigure()   // keep the panel open while the screens rearrange
+        // Show it now (the switch and curtain animate), then do the slow reconfiguration on the next turn of the run loop.
+        withAnimation(spring) { list = list.map { $0.uuid == d.uuid ? Display(id: d.id, uuid: d.uuid, name: d.name, on: on) : $0 } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if self.app.hotTurn(d, on: on) == .lastDisplay { NSSound.beep() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refresh() }
+        }
     }
     func allOn() { app.allOn(); refresh() }
 }
@@ -51,10 +60,18 @@ struct PanelView: View {
             if m.app.volume.available && m.app.volume.enabled { VolumeRow(m: m) }
 
             Divider().padding(.top, 2)
-            DisclosureGroup(isExpanded: $m.settingsOpen) { SettingsView(m: m).padding(.top, 6) } label: {
-                Text("Settings").font(.subheadline.weight(.medium))
-                    .contentShape(Rectangle()).onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { m.settingsOpen.toggle() } }
+            // One button for the whole row: arrow and label run the same single animation.
+            Button { withAnimation(spring) { m.settingsOpen.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(m.settingsOpen ? 90 : 0))
+                    Text("Settings").font(.subheadline.weight(.medium))
+                    Spacer()
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            if m.settingsOpen { SettingsView(m: m).padding(.top, 2).transition(.opacity) }
             HStack(spacing: 14) {
                 Button("About Shade") { m.app.panel.close(); m.app.about() }
                 if let u = m.app.update { Button("Update \(u.tag)") { m.app.openUpdate() }.foregroundStyle(Color.accentColor) }
@@ -64,6 +81,7 @@ struct PanelView: View {
             .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
         }
         .padding(14).frame(width: 300)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -119,7 +137,7 @@ struct Thumb: View {
             }
         }
         .frame(width: 44, height: 34)
-        .animation(.easeInOut(duration: 0.3), value: on)
+        .animation(spring, value: on)
     }
 }
 
@@ -175,17 +193,70 @@ final class Panel: NSObject {
         let host = NSHostingController(rootView: PanelView(m: model))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
-        popover.behavior = .transient
+        // .transient closes the panel whenever the screens reconfigure. We close it ourselves on an outside click or Esc.
+        popover.behavior = .applicationDefined
         popover.animates = true
     }
+    var monitors: [Any] = []
+    var wantOpen = false          // the user has the panel open; survives a reconfiguration
+    var reconfiguring = false
+    var reconfigureEnd: DispatchWorkItem?
+
     func toggle(_ b: NSStatusBarButton?) {
         if popover.isShown { close(); return }
-        guard let b else { return }
-        model.app.volume.ensureTap(); model.app.volume.refresh(); model.refresh()
-        NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+        show(b, animated: true)
     }
-    func close() { popover.performClose(nil) }
+    func show(_ b: NSStatusBarButton?, animated: Bool) {
+        guard let b, b.window != nil else { return }
+        wantOpen = true
+        model.app.volume.ensureTap(); model.app.volume.refresh()   // DDC is read off the main thread
+        NSApp.activate(ignoringOtherApps: true)
+        popover.animates = animated
+        popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+        popover.animates = true
+        DispatchQueue.main.async { self.model.refresh() }   // show the cached list now, confirm it right after
+        installMonitors()
+    }
+    func close() {
+        wantOpen = false
+        removeMonitors()
+        popover.performClose(nil)
+    }
+    func installMonitors() {
+        guard monitors.isEmpty else { return }
+        let outside: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: outside, handler: { [weak self] _ in
+            guard let self, !self.reconfiguring else { return }
+            self.close()
+        }) { monitors.append(g) }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: [.keyDown], handler: { [weak self] e in
+            if e.keyCode == 53, let self, self.popover.isShown { self.close(); return nil }   // Esc
+            return e
+        }) { monitors.append(l) }
+    }
+    func removeMonitors() { monitors.forEach(NSEvent.removeMonitor); monitors = [] }
+
+    /// Called when a toggle starts and when macOS begins a display reconfiguration.
+    func beginReconfigure() {
+        reconfiguring = true
+        reconfigureEnd?.cancel()
+        let w = DispatchWorkItem { self.reconfiguring = false }   // failsafe if no change ever arrives
+        reconfigureEnd = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: w)
+    }
+    /// The screens have settled: put the panel back under the status item, which may now be on another screen's menu bar.
+    func endReconfigure() {
+        reconfigureEnd?.cancel()
+        if wantOpen {
+            let b = model.app.item.button
+            if popover.isShown { popover.animates = false; popover.close() }
+            show(b, animated: false)
+            blog.notice("panel re-anchored after reconfiguration on screen \(b?.window?.screen?.localizedName ?? "?", privacy: .public)")
+        }
+        let w = DispatchWorkItem { self.reconfiguring = false }   // swallow the late clicks macOS synthesizes
+        reconfigureEnd = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
+    }
 
     /// For README screenshots only: SHADE_APPEARANCE=light|dark, SHADE_OPEN_PANEL=1.
     func devHooks() {

@@ -81,7 +81,7 @@ func restoreAll() {
 
 // MARK: - Display model shared by the panel, hotkeys and CLI
 
-struct Display { let id: CGDirectDisplayID; let uuid: String; let name: String; let on: Bool }
+struct Display: Equatable { let id: CGDirectDisplayID; let uuid: String; let name: String; let on: Bool }
 
 func displayName(_ id: CGDirectDisplayID) -> String {
     if let s = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id }) {
@@ -226,8 +226,8 @@ final class App: NSObject, NSApplicationDelegate {
         registerHotKeys()
         installSignalHandlers()
         CGDisplayRegisterReconfigurationCallback({ _, flags, ctx in
-            guard !flags.contains(.beginConfigurationFlag) else { return }
             let me = Unmanaged<App>.fromOpaque(ctx!).takeUnretainedValue()
+            guard !flags.contains(.beginConfigurationFlag) else { DispatchQueue.main.async { me.panel.beginReconfigure() }; return }
             // Let the display list settle, then make sure something is still lit.
             me.settle?.cancel()
             let w = DispatchWorkItem { me.displaysChanged() }
@@ -258,6 +258,7 @@ final class App: NSObject, NSApplicationDelegate {
         volume.refresh()
         updateIcon()
         panel.model.refresh()
+        panel.endReconfigure()
     }
 
     // MARK: Update check: at most once a day, asks GitHub's public releases API. No server, no auto-install.
